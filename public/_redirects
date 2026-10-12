@@ -1,0 +1,6 @@
+# Netlify Redirects Configuration for SIRI E-Commerce
+# 1. Serverless API routing
+/api/*  /.netlify/functions/api/:splat  200
+
+# 2. Single-Page App client routing fallback
+/*      /index.html                     200
