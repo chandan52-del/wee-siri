@@ -8,6 +8,15 @@ export interface Product {
   name: string;
   slug: string;
   sku?: string;
+  /** Shopify Storefront API IDs used to create a hosted checkout. */
+  shopifyProductId?: string;
+  shopifyVariantId?: string;
+  shopifyVariants?: Array<{
+    id: string;
+    title: string;
+    availableForSale: boolean;
+    selectedOptions: Record<string, string>;
+  }>;
   description: string;
   shortDescription?: string;
   price: number;

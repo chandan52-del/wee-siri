@@ -3,18 +3,23 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[dev]
+  command = "npm run vite-dev"
+  targetPort = 5173
+  port = 8888
+  autoLaunch = false
+
 [functions]
   node_bundler = "esbuild"
   included_files = ["data/**"]
 
-# 1. API rewrite: forwards all /api/* calls to the Netlify Serverless Function
+# API rewrite: forward /api/* requests to the Netlify serverless function
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
 
-# 2. SPA fallback: forwards all frontend routes to index.html for client-side routing
-# (Must be specified AFTER the API redirect so /api/* is never hijacked by index.html)
+# SPA fallback: serve index.html for frontend routes
 [[redirects]]
   from = "/*"
   to = "/index.html"

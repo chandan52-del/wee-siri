@@ -16,6 +16,8 @@ import {
   ArrowLeft,
   Sparkles,
   Heart,
+  ShoppingBag,
+  LoaderCircle,
 } from 'lucide-react';
 import {
   getWhatsAppUrl,
@@ -45,6 +47,7 @@ export const ProductDetailPage: React.FC = () => {
   const [selectedSize, setSelectedSize] = useState<string>(() => activeProduct?.sizes?.[0] || '');
   const [selectedColor, setSelectedColor] = useState<string>(() => activeProduct?.colors?.[0]?.name || '');
   const [activeTab, setActiveTab] = useState<'desc' | 'specs' | 'features'>('desc');
+  const [startingCheckout, setStartingCheckout] = useState(false);
 
   const lastInitIdRef = React.useRef<string | undefined>(activeProduct?.id);
 
@@ -108,6 +111,40 @@ export const ProductDetailPage: React.FC = () => {
     productUrl
   );
   const inquiryWhatsAppUrl = getWhatsAppUrl(settings.whatsappNumber, inquiryMsg);
+
+  const handleShopifyCheckout = async () => {
+    const variants = activeProduct.shopifyVariants || [];
+    const selectedVariant = variants.find((variant) => {
+      if (!variant.availableForSale) return false;
+      const options = variant.selectedOptions || {};
+      const sizeMatches = !selectedSize || !options.Size || options.Size === selectedSize;
+      const colorValue = options.Color || options.Colour || options.color || options.colour;
+      const colorMatches = !selectedColor || !colorValue || colorValue === selectedColor;
+      return sizeMatches && colorMatches;
+    });
+    const variantId = selectedVariant?.id || activeProduct.shopifyVariantId;
+    if (!variantId) {
+      showToast('Online checkout is not available for this product yet. Please order via WhatsApp.', 'info');
+      return;
+    }
+    setStartingCheckout(true);
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variantId, quantity }),
+      });
+      const result = await response.json();
+      if (!response.ok || typeof result.checkoutUrl !== 'string') {
+        throw new Error(result.error || 'Could not start checkout.');
+      }
+      window.location.assign(result.checkoutUrl);
+    } catch (error: any) {
+      showToast(error?.message || 'Could not start Shopify checkout. Please try again.', 'error');
+    } finally {
+      setStartingCheckout(false);
+    }
+  };
 
   // Share Product Link
   const handleShare = async () => {
@@ -456,6 +493,19 @@ export const ProductDetailPage: React.FC = () => {
                 <MessageCircle className="w-4 h-4 fill-emerald-400 text-stone-950 shrink-0" />
                 <span>Order on WhatsApp (Instant Confirmation)</span>
               </a>
+            )}
+
+            {/* Shopify-hosted checkout for products synced from Shopify */}
+            {!isOutOfStock && activeProduct.shopifyVariantId && (
+              <button
+                type="button"
+                onClick={handleShopifyCheckout}
+                disabled={startingCheckout}
+                className="w-full py-3.5 px-6 rounded-xl font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-2.5 transition-all border border-emerald-700 bg-emerald-700 hover:bg-emerald-800 text-white disabled:opacity-60"
+              >
+                {startingCheckout ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <ShoppingBag className="w-4 h-4" />}
+                <span>{startingCheckout ? 'Opening secure checkout…' : 'Buy Now — Secure Shopify Checkout'}</span>
+              </button>
             )}
 
             {/* Secondary Inquire on WhatsApp Button */}

@@ -49,10 +49,7 @@ try {
 }
 
 // Session secret for stateless HMAC token generation & verification across cold starts
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.ADMIN_PASSWORD ||
-  'siri_secure_admin_hmac_secret_2026_key';
+const SESSION_SECRET = process.env.SESSION_SECRET || '';
 
 // CORS response headers
 const corsHeaders: Record<string, string> = {
@@ -85,13 +82,10 @@ function verifyPassword(inputPassword: string, storedHash?: string, storedSalt?:
       return false;
     }
   }
-  return inputPassword === 'Chandan@07';
+  return false;
 }
 
 function getDefaultSchema(): DatabaseSchema {
-  const defaultSalt = 'eda6cad4aea4099af56f3754eb5c9fe2';
-  const defaultHash = hashPassword('Chandan@07', defaultSalt);
-
   return {
     settings: {
       storeName: 'SIRI',
@@ -116,8 +110,6 @@ function getDefaultSchema(): DatabaseSchema {
         youtube: 'https://youtube.com/@siri_store',
       },
       aboutText: 'SIRI is an independent online brand dedicated to curated quality and personal customer care. By removing impersonal checkout funnels and intermediaries, we speak with you directly on WhatsApp to address your questions, verify item details, and coordinate swift delivery.',
-      adminPasswordSalt: defaultSalt,
-      adminPasswordHash: defaultHash,
     },
     categories: [
       {
@@ -217,6 +209,7 @@ function saveSessions(sessions: Set<string>): void {
 }
 
 function createAdminToken(): string {
+  if (!SESSION_SECRET) throw new Error('SESSION_SECRET is not configured.');
   const timestamp = Date.now().toString(36);
   const randomPart = crypto.randomBytes(16).toString('hex');
   const payload = `${timestamp}.${randomPart}`;
@@ -230,7 +223,7 @@ function createAdminToken(): string {
 }
 
 function verifyAdminToken(token?: string): boolean {
-  if (!token || !token.startsWith('siri_adm_')) return false;
+  if (!SESSION_SECRET || !token || !token.startsWith('siri_adm_')) return false;
 
   // 1. Verify cryptographic HMAC signature
   const raw = token.replace(/^siri_adm_/, '');
@@ -262,6 +255,142 @@ function isAdmin(headers: Record<string, string | undefined>): boolean {
   if (!authHeader) return false;
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   return verifyAdminToken(token);
+}
+
+// Shopify Storefront API helpers. Keep the access token server-side in Netlify.
+function getShopifyConfig(): { domain: string; token: string; apiVersion: string } | null {
+  const rawDomain = process.env.SHOPIFY_STORE_DOMAIN?.trim();
+  const token = process.env.SHOPIFY_STOREFRONT_ACCESS_TOKEN?.trim();
+  if (!rawDomain || !token) return null;
+  const domain = rawDomain.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  if (!domain.endsWith('.myshopify.com')) {
+    throw new Error('SHOPIFY_STORE_DOMAIN must be the store’s .myshopify.com domain.');
+  }
+  return { domain, token, apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07' };
+}
+
+async function shopifyGraphql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  const config = getShopifyConfig();
+  if (!config) throw new Error('Shopify Storefront API environment variables are not configured.');
+  const response = await fetch(`https://${config.domain}/api/${config.apiVersion}/graphql.json`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Storefront-Access-Token': config.token,
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const payload = await response.json() as { data?: T; errors?: Array<{ message?: string }> };
+  if (!response.ok || payload.errors?.length || !payload.data) {
+    console.error('[Shopify Storefront API]', response.status, payload.errors?.map((e) => e.message));
+    throw new Error('Shopify request failed. Check the store domain, Storefront API token, and API permissions.');
+  }
+  return payload.data;
+}
+
+function mapShopifyProduct(node: any): Record<string, any> {
+  const variants = node.variants?.nodes || [];
+  const variant = variants.find((v: any) => v.availableForSale) || variants[0];
+  const price = Number(variant?.price?.amount ?? node.priceRange?.minVariantPrice?.amount ?? 0);
+  const compareAt = Number(variant?.compareAtPrice?.amount ?? 0);
+  const images = (node.images?.nodes || []).map((image: any) => image.url).filter(Boolean);
+  const productOptions = node.options || [];
+  const sizeOption = productOptions.find((option: any) => /size/i.test(option.name));
+  const colorOption = productOptions.find((option: any) => /colou?r/i.test(option.name));
+  const totalInventory = typeof variant?.quantityAvailable === 'number' ? variant.quantityAvailable : undefined;
+  const available = Boolean(node.availableForSale && variant?.availableForSale);
+  const categoryName = node.productType || node.vendor || 'Shopify Products';
+  return {
+    id: node.id,
+    shopifyProductId: node.id,
+    shopifyVariantId: variant?.id,
+    name: node.title,
+    slug: node.handle,
+    sku: variant?.sku || undefined,
+    description: node.description || '',
+    shortDescription: node.description?.slice(0, 180) || '',
+    price,
+    originalPrice: compareAt > price ? compareAt : null,
+    discountPercent: compareAt > price ? Math.round(((compareAt - price) / compareAt) * 100) : null,
+    categoryId: node.productType || node.vendor || 'shopify-products',
+    categoryName,
+    subcategory: node.vendor || undefined,
+    images,
+    sizes: sizeOption?.values || [],
+    colors: (colorOption?.values || []).map((name: string) => ({ name, hex: '#d6d3d1' })),
+    variations: variants.map((v: any) => v.title).filter((title: string) => title && title !== 'Default Title'),
+    shopifyVariants: variants.map((v: any) => ({
+      id: v.id,
+      title: v.title,
+      availableForSale: Boolean(v.availableForSale),
+      selectedOptions: Object.fromEntries((v.selectedOptions || []).map((option: any) => [option.name, option.value])),
+    })),
+    stockCount: totalInventory,
+    stockStatus: available ? (totalInventory !== undefined && totalInventory <= 5 ? 'low_stock' : 'in_stock') : 'out_of_stock',
+    isFeatured: false,
+    isTrending: false,
+    isNewArrival: false,
+    reviewsCount: 0,
+    rating: 0,
+    status: 'published',
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+  };
+}
+
+async function fetchShopifyProducts(): Promise<Record<string, any>[]> {
+  const products: any[] = [];
+  let after: string | null = null;
+
+  while (true) {
+    const data: { products: { nodes: any[]; pageInfo: { hasNextPage: boolean; endCursor?: string | null } } } = await shopifyGraphql<{
+      products: {
+        nodes: any[];
+        pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+      };
+    }>(`
+      query SiriProducts($after: String) {
+        products(first: 100, after: $after, sortKey: TITLE) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id title handle description productType vendor availableForSale createdAt updatedAt
+            images(first: 10) { nodes { url altText } }
+            priceRange { minVariantPrice { amount currencyCode } }
+            options { name values }
+            variants(first: 100) { nodes { id title sku availableForSale selectedOptions { name value } price { amount currencyCode } compareAtPrice { amount currencyCode } } }
+          }
+        }
+      }
+    `, { after });
+
+    products.push(...data.products.nodes);
+
+    if (!data.products.pageInfo.hasNextPage) break;
+
+    const nextCursor: string | null | undefined = data.products.pageInfo.endCursor;
+    if (!nextCursor || nextCursor === after) {
+      throw new Error('Shopify product pagination stopped because the next cursor was missing or unchanged.');
+    }
+    after = nextCursor;
+  }
+
+  return products.map(mapShopifyProduct);
+}
+
+async function createShopifyCheckout(variantId: string, quantity: number): Promise<string> {
+  const data = await shopifyGraphql<{ cartCreate: { cart?: { checkoutUrl: string }; userErrors: Array<{ message: string }> } }>(`
+    mutation SiriCreateCart($input: CartInput!) {
+      cartCreate(input: $input) {
+        cart { checkoutUrl }
+        userErrors { message }
+      }
+    }
+  `, { input: { lines: [{ merchandiseId: variantId, quantity }] } });
+  const result = data.cartCreate;
+  if (result.userErrors?.length || !result.cart?.checkoutUrl) {
+    throw new Error(result.userErrors?.map((e) => e.message).join('; ') || 'Shopify could not create checkout.');
+  }
+  return result.cart.checkoutUrl;
 }
 
 // In-memory brute force protection
@@ -342,13 +471,16 @@ export const handler = async (
 
     const db = readDb();
     const envPassword = process.env.ADMIN_PASSWORD;
-
-    let valid = false;
-    if (envPassword && password === envPassword) {
-      valid = true;
-    } else if (verifyPassword(password, db.settings.adminPasswordHash, db.settings.adminPasswordSalt)) {
-      valid = true;
+    if (!SESSION_SECRET) {
+      return jsonResponse(503, { success: false, message: 'Administrator security is not configured. Set SESSION_SECRET in Netlify.' });
     }
+
+    // ADMIN_PASSWORD is only the initial bootstrap password. Once a password hash
+    // exists, the stored password takes precedence so password changes take effect.
+    const hasStoredPassword = Boolean(db.settings.adminPasswordHash && db.settings.adminPasswordSalt);
+    const valid = hasStoredPassword
+      ? verifyPassword(password, db.settings.adminPasswordHash, db.settings.adminPasswordSalt)
+      : Boolean(envPassword && password === envPassword);
 
     if (valid) {
       loginAttempts.delete(clientIp);
@@ -516,10 +648,37 @@ export const handler = async (
     }
   }
 
+  // Shopify checkout: creates a Shopify cart and returns its hosted checkout URL.
+  if (subpath === '/checkout' && method === 'POST') {
+    const variantId = typeof body.variantId === 'string' ? body.variantId : '';
+    const quantity = Number(body.quantity);
+    if (!variantId.startsWith('gid://shopify/ProductVariant/') || !Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      return jsonResponse(400, { error: 'A valid Shopify variant ID and quantity between 1 and 20 are required.' });
+    }
+    try {
+      const checkoutUrl = await createShopifyCheckout(variantId, quantity);
+      return jsonResponse(200, { checkoutUrl });
+    } catch (error: any) {
+      console.error('[SIRI checkout]', error?.message || error);
+      return jsonResponse(502, { error: 'Unable to start Shopify checkout. Please try again or contact support.' });
+    }
+  }
+
   // 11. Products GET
   if (subpath === '/products' && method === 'GET') {
-    const db = readDb();
-    let products = [...db.products];
+    let products: Record<string, any>[];
+    try {
+      // When configured, Shopify is the source of truth for customer-facing products.
+      if (getShopifyConfig()) {
+        products = await fetchShopifyProducts();
+      } else {
+        const db = readDb();
+        products = [...db.products];
+      }
+    } catch (error: any) {
+      console.error('[SIRI products]', error?.message || error);
+      return jsonResponse(502, { error: 'Unable to load products from Shopify. Check the Storefront API configuration and permissions.' });
+    }
     const includeHidden = query.includeHidden === 'true' && isAdmin(event.headers);
 
     if (!includeHidden) {
