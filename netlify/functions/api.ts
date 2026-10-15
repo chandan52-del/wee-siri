@@ -90,7 +90,7 @@ function getDefaultSchema(): DatabaseSchema {
     settings: {
       storeName: 'SIRI',
       tagline: 'Curated Elegance, Direct WhatsApp Ordering',
-      description: 'Discover hand-picked collections curated for elegance, everyday style, and uncompromising quality. Connect with us directly on WhatsApp for personal assistance and immediate orders.',
+      description: 'Discover hand-picked collections curated for elegance, everyday style, and uncompromising quality. Connect with us directly on WhatsApp for personal assistance and immediate or[...]',
       currencySymbol: '₹',
       currencyCode: 'INR',
       whatsappNumber: '917349095032',
@@ -109,7 +109,7 @@ function getDefaultSchema(): DatabaseSchema {
         twitter: 'https://twitter.com/siri_store',
         youtube: 'https://youtube.com/@siri_store',
       },
-      aboutText: 'SIRI is an independent online brand dedicated to curated quality and personal customer care. By removing impersonal checkout funnels and intermediaries, we speak with you directly on WhatsApp to address your questions, verify item details, and coordinate swift delivery.',
+      aboutText: 'SIRI is an independent online brand dedicated to curated quality and personal customer care. By removing impersonal checkout funnels and intermediaries, we speak with you direct[...]',
     },
     categories: [
       {
@@ -276,7 +276,7 @@ async function shopifyGraphql<T>(query: string, variables: Record<string, unknow
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Shopify-Storefront-Access-Token': config.token,
+      'Shopify-Storefront-Private-Token': config.token,
     },
     body: JSON.stringify({ query, variables }),
   });
